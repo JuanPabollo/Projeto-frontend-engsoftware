@@ -17,7 +17,7 @@ st.set_page_config(
 @st.cache_data
 def carregar_dados():
 
-    caminho = "pages/sinannet_cnv_violepe231354143_208_128_99.csv"
+    caminho = "MeuApp/pages/sinannet_cnv_violepe231354143_208_128_99.csv"
     return pd.read_csv(caminho, sep=";", encoding="iso-8859-1", skiprows=3)
 
 st.markdown("""
