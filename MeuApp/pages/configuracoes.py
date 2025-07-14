@@ -3,7 +3,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Nexus", layout="centered", initial_sidebar_state="collapsed")
 
-st.image("pages/image.png", use_container_width=True)
+st.image("MeuApp/pages/image.png", use_container_width=True)
 
 left, center, right = st.columns([3, 5, 2])
 
