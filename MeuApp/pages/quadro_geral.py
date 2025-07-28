@@ -313,8 +313,8 @@ elif st.session_state.page == "🗺️ Mapa Interativo":
         contagem_de_casos = dados_raca["MUNICIPIO"].value_counts()
         dados_geo["Casos"] = dados_geo["cidade"].map(contagem_de_casos).fillna(0).astype(int)
 
-    contagem_de_casos = dados_filtrados["MUNICIPIO"].value_counts()
-    dados_geo["Casos"] = dados_geo["cidade"].map(contagem_de_casos).fillna(0).astype(int)
+    #contagem_de_casos = dados_filtrados["MUNICIPIO"].value_counts()
+    #dados_geo["Casos"] = dados_geo["cidade"].map(contagem_de_casos).fillna(0).astype(int)
         
 
     heat_data = []
