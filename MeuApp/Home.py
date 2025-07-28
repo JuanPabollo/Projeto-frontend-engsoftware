@@ -42,7 +42,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-st.image("pages/image.png", use_container_width=True)
+st.image("MeuApp\pages\image.png", use_container_width=True)
 
 st.markdown('<br><br>', unsafe_allow_html=True)
 
