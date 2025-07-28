@@ -73,7 +73,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Imagem e título
-st.image(r"MeuApp\pages\image.png", use_container_width=True)
+st.image("MeuApp/pages/image.png", use_container_width=True)
 st.markdown('<div class="title">Nexus</div>', unsafe_allow_html=True)
 st.subheader("Login")
 
