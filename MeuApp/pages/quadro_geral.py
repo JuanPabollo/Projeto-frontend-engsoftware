@@ -61,7 +61,7 @@ def carregar_dados_pernambuco():
     A função agora retorna um DataFrame limpo, pronto para receber os dados de casos.
     """
     try:
-        url = "pages/municipios.csv"
+        url = "MeuApp\pages\municipios.csv"
         df_brasil = pd.read_csv(url)
         df_pe = df_brasil[df_brasil['codigo_uf'] == 26].copy()
         
