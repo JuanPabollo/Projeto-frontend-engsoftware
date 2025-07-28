@@ -3,7 +3,7 @@ import requests
 import json
 
 # Configurações da API
-API_BASE_URL = "http://127.0.0.1:8000/api/" 
+API_BASE_URL = "http://54.209.29.198:8000/api/" 
 
 def make_authenticated_request(method, url, headers=None, params=None, json_data=None):
     if 'auth_token' not in st.session_state:
@@ -41,14 +41,13 @@ def registrar_usuario(data):
     try:
         response = requests.post(f"{API_BASE_URL}register/", json=data) 
         response.raise_for_status()
-
         return True
 
     except requests.exceptions.RequestException as e:
 
         error_message = "Erro no cadastro. Por favor, tente novamente."
 
-        if response is not None:
+        if response in locals() and response is not None:
 
             try:
                 error_details = response.json()
@@ -142,8 +141,9 @@ with st.container():
     confirmar_senha = col1.text_input("Confirmar Senha", type= "password", placeholder="Confirme sua Senha")
     nome_completo = col2.text_input("Nome Completo", placeholder= "Digite seu Nome Completo")
     perfil = col2.selectbox(label="Perfil", options= ["Gestor de Saúde","Agente de Saúde"])
-    unidade_de_saude = col2.text_input("Unidade de Saúde", placeholder= "Selecione sua Unidade de Saúde")
-    especialidade = col2.text_input("Especialidade", placeholder="Digite a sua Especialidade")
+    
+    unidade_saude = ''
+    especialidade = ''
 
     if perfil == "Gestor de Saúde":
 
@@ -152,6 +152,8 @@ with st.container():
     elif perfil == "Agente de Saúde":
 
         perfil = "profissional"
+        unidade_saude = col2.text_input("Unidade de Saúde", placeholder= "Selecione sua Unidade de Saúde")
+        especialidade = col2.text_input("Função", placeholder="Digite a sua Função")
 
     dados = {
         "username": username,
@@ -159,7 +161,7 @@ with st.container():
         "password_confirmacao": confirmar_senha,
         "nome_completo": nome_completo,
         "especialidade": especialidade,
-        "unidade_de_saude": unidade_de_saude,
+        "unidade_saude": unidade_saude,
         "email": email,
         "perfil": perfil
         }

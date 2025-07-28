@@ -2,27 +2,187 @@ import folium
 import numpy as np
 import pandas as pd
 import streamlit as st
-from datetime import datetime
+from datetime import date, datetime
 from datetime import timedelta
 from folium.plugins import HeatMap
 from streamlit_folium import folium_static
 import altair as alt
-
-@st.cache_data
-def carregar_dados():
-
-    caminho = "pages/sinannet_cnv_violepe231354143_208_128_99.csv"
-    return pd.read_csv(caminho, sep=";", encoding="iso-8859-1", skiprows=3)
-
-
-
+from pages.configuracoes import config
+from pages.equipes import equipes, get_equipes
+from pages.util import API_BASE_URL, make_authenticated_request
+import extra_streamlit_components as stx
+from pages._login import cookie
 
 st.set_page_config(
     page_title="Nexus - Quadro Geral",
     page_icon=":chart_with_upwards_trend:",
-    layout="wide",
+    layout="wide"
 )
 
+# Recupera token salvo no cookie
+token_cookie = cookie.get("auth_token")
+if token_cookie and 'auth_token' not in st.session_state:
+    st.session_state.auth_token = token_cookie
+
+# Se não houver token válido, redireciona para login
+if 'auth_token' not in st.session_state:
+    st.switch_page("pages/_login.py")
+
+@st.cache_data
+def get_quadro():
+    token_cookie = cookie.get("auth_token")
+    if token_cookie and 'auth_token' not in st.session_state:
+        st.session_state.auth_token = token_cookie
+
+    if 'auth_token' not in st.session_state:
+        st.switch_page("pages/_login.py")
+
+    url = f"{API_BASE_URL}registro-violencia/"
+    response = make_authenticated_request('get', url)
+
+    if response and response.status_code == 200:
+        df_equipe = pd.DataFrame(response.json())
+        df_equipe.drop(columns=['id'], inplace=True)
+        df_equipe = df_equipe[df_equipe["CS_SEXO"] == 'F']
+        if 'DT_NOTIFIC' in df_equipe.columns:
+            df_equipe['DT_NOTIFIC'] = pd.to_datetime(df_equipe['DT_NOTIFIC'], errors='coerce')
+        if 'DT_OCOR' in df_equipe.columns:
+            # errors='coerce' vai colocar NaT para valores que não puderem ser convertidos
+            df_equipe['DT_OCOR'] = pd.to_datetime(df_equipe['DT_OCOR'], errors='coerce')
+        return df_equipe
+    else:
+        st.error("Erro ao carregar dados")
+        return pd.DataFrame()
+
+@st.cache_data
+def carregar_dados_pernambuco():
+    """
+    Carrega a lista de municípios de Pernambuco com suas coordenadas.
+    A função agora retorna um DataFrame limpo, pronto para receber os dados de casos.
+    """
+    try:
+        url = "pages/municipios.csv"
+        df_brasil = pd.read_csv(url)
+        df_pe = df_brasil[df_brasil['codigo_uf'] == 26].copy()
+        
+        # Seleciona e renomeia as colunas. A coluna 'nome' se tornará 'cidade'.
+        df_final = df_pe[['nome', 'latitude', 'longitude']].rename(columns={
+            'nome': 'cidade'
+        })
+        df_final["Casos"] = None
+        return df_final
+
+    except Exception as e:
+        st.error(f"Não foi possível carregar a lista de municípios. Erro: {e}")
+        return pd.DataFrame()
+    
+def grafico(dados, ano):
+    st.markdown("---")
+    
+
+    # --- Lógica para o Gráfico de Linhas por Mês e MUNICÍPIO ---
+    if not dados.empty and 'DT_OCOR' in dados.columns and 'MUNICIPIO' in dados.columns and 'NU_ANO' in dados.columns:
+        # 1. Filtrar os dados para o ano selecionado no selectbox do gráfico
+        dados_grafico_ano = dados[dados["NU_ANO"] == ano].copy()
+
+        # 2. Extrair o mês da coluna de data (DT_OCOR)
+        dados_grafico_ano['MES'] = dados_grafico_ano['DT_OCOR'].dt.month
+        
+        # Mapear número do mês para nome do mês (para o eixo X)
+        mes_nomes = {
+            1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
+            7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'
+        }
+        dados_grafico_ano['MES_NOME'] = dados_grafico_ano['MES'].map(mes_nomes)
+
+        # 3. Agrupar por Mês e MUNICÍPIO e contar os casos
+        # Remove linhas onde MUNICIPIO é None ou vazio antes de agrupar, se aplicável
+        dados_grafico_ano_limpo = dados_grafico_ano.dropna(subset=['MUNICIPIO'])
+        
+        # Contar ocorrências para cada MUNICIPIO por MÊS
+        contagem_por_mes_municipio = dados_grafico_ano_limpo.groupby(['MES', 'MES_NOME', 'MUNICIPIO']).size().reset_index(name='Numero de Casos')
+        
+        # 4. Preencher meses faltantes para linhas contínuas
+        # Pega todos os municípios únicos e todos os meses possíveis
+        todos_municipios_unicos = contagem_por_mes_municipio['MUNICIPIO'].unique()
+        todos_meses_numeros = range(1, 13)
+        
+        # Cria um DataFrame de todos os meses/municípios possíveis
+        full_index = pd.MultiIndex.from_product([todos_meses_numeros, todos_municipios_unicos], names=['MES', 'MUNICIPIO'])
+        full_df = pd.DataFrame(index=full_index).reset_index()
+        
+        # Faz um merge com a contagem real e preenche NaNs com 0
+        contagem_por_mes_municipio = pd.merge(
+            full_df, contagem_por_mes_municipio, 
+            on=['MES', 'MUNICIPIO'], how='left'
+        ).fillna(0)
+        contagem_por_mes_municipio['Numero de Casos'] = contagem_por_mes_municipio['Numero de Casos'].astype(int)
+        
+        # Adiciona o nome do mês novamente após o merge
+        contagem_por_mes_municipio['MES_NOME'] = contagem_por_mes_municipio['MES'].map(mes_nomes)
+
+         # --- NOVO: Gráfico de Barras por Município ---
+    st.subheader(f"Total de Casos por Município (Ano {ano})")
+
+    # Reutilize 'dados_grafico_ano' que já está filtrado pelo ano selecionado
+    # Agrupe por MUNICPIO e conte o número de ocorrências
+    if not dados_grafico_ano.empty and 'MUNICIPIO' in dados_grafico_ano.columns:
+        contagem_por_municipio = dados_grafico_ano['MUNICIPIO'].value_counts().reset_index()
+        contagem_por_municipio.columns = ['Município', 'Total de Casos']
+        
+        # Opcional: Ordenar barras para melhor visualização (ex: do maior para o menor)
+        contagem_por_municipio = contagem_por_municipio.sort_values('Total de Casos', ascending=False)
+
+        bar_chart = alt.Chart(contagem_por_municipio).mark_bar().encode(
+            x=alt.X('Total de Casos:Q', title='Número de Casos'),
+            y=alt.Y('Município:N', sort='-x', title='Município'), # Ordena Y pelo valor do X (descendente)
+            tooltip=['Município', 'Total de Casos']
+        ).properties(
+            title=f'Total de Casos por Município em {ano}'
+        ).interactive() # Permite zoom
+
+        st.altair_chart(bar_chart, use_container_width=True)
+
+    else:
+        st.info(f"Dados insuficientes ou colunas 'DT_OCOR'/'MUNICIPIO' ausentes para gerar o gráfico para o ano {ano}.")
+    
+    st.subheader("📍 Variação de Casos entre as datas selecionadas:")
+
+    # Garante que DT_OCOR está em datetime
+    dados['DT_NOTIFIC'] = pd.to_datetime(dados['DT_NOTIFIC'], errors='coerce')
+
+    # Cria colunas auxiliares de ano e mês
+    dados['ANO'] = dados['DT_NOTIFIC'].dt.year
+    dados['MES'] = dados['DT_NOTIFIC'].dt.month
+
+    # Agrupa os dados por ANO e MES
+    dados_ano = dados[dados['ANO'] == ano]
+
+    # Conta casos por mês
+    casos_por_mes = dados_ano.groupby('MES').size().sort_index()
+
+
+    primeiro_mes = casos_por_mes.iloc[0]
+    ultimo_mes = casos_por_mes.iloc[-1]
+
+    # Calcula a variação percentual entre o primeiro e o último mês
+    if primeiro_mes > 0:
+        variacao_percentual = ((ultimo_mes - primeiro_mes) / primeiro_mes) * 100
+    else:
+        variacao_percentual = 0.0
+
+    total_ano = casos_por_mes.sum()
+    variancia_mensal = casos_por_mes.var()
+
+    # Formata texto no estilo da imagem
+    tipo_variacao = "aumento" if variacao_percentual > 0 else "redução"
+    variacao_formatada = abs(variacao_percentual)
+
+    st.markdown(f"""
+    - **{ano}**: {tipo_variacao} de **{variacao_formatada:.2f}%** nos casos entre o primeiro e o último mês.
+    • Total de casos no ano: **{total_ano}**  
+    
+    """)
 
 st.markdown("""
     <style>
@@ -35,186 +195,133 @@ st.markdown("""
 
 st.image("pages/image.png", use_container_width=True) 
 
+
+
 if 'page' not in st.session_state:
 
     st.session_state.page = '📊 Quadro Geral'
 
-
 with st.sidebar:
 
     st.markdown("### 🧭 Navegação")
-    escolha = st.radio("Escolha a página:", ["📊 Quadro Geral", "🗺️ Mapa Interativo"], label_visibility="collapsed")
+    escolha = st.radio("Escolha a página:", ["📊 Quadro Geral", "🗺️ Mapa Interativo", "🤝 Equipes", "⚙️ Configurações"], label_visibility="collapsed")
     st.session_state.page = escolha
 
 
 if st.session_state.page == "📊 Quadro Geral":
 
     st.markdown("<h1 style='text-align: center;'>Quadro Geral de Casos</h1>", unsafe_allow_html=True)
-    dados = carregar_dados()
-    dados.rename(columns={dados.columns[0]: "Macrorregião"}, inplace=True)
 
-    if 'Total' in dados.columns:
+    dados = get_quadro()
+    dados["DT_NOTIFIC"] = pd.to_datetime(dados["DT_NOTIFIC"])
 
-        dados.drop(columns=['Total'], inplace=True)
-
-    df_meltado = dados.melt(id_vars=["Macrorregião"], var_name="Mês", value_name="Casos")
-
-    df_meltado["Mês"] = df_meltado["Mês"].str.strip()
-    df_meltado["Casos"] = pd.to_numeric(df_meltado["Casos"], errors='coerce')
-
-    mes_para_numero = {
-        "Jan": 1, "Fev": 2, "Mar": 3, "Abr": 4, "Mai": 5, "Jun": 6,
-        "Jul": 7, "Ago": 8, "Set": 9, "Out": 10, "Nov": 11, "Dez": 12
-    }
-    df_meltado["Data"] = df_meltado["Mês"].astype(str).map(lambda m: datetime(2024, mes_para_numero[m], 1))
-
-    ordem_meses = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", 
-                "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
-    df_meltado["Mês"] = pd.Categorical(df_meltado["Mês"], categories=ordem_meses, ordered=True)
-
-    st.sidebar.header("Filtros")
-
-    regioes_disponiveis = df_meltado["Macrorregião"].unique().tolist()
-
-    regioes_selecionadas = st.sidebar.multiselect("Selecione as macrorregiões", regioes_disponiveis, default=regioes_disponiveis)
-
-    meses_2024 = [datetime(2024, m, 1) for m in range(1, 13)]
-
-    intervalo_meses = st.sidebar.slider(
-        "Selecione o intervalo de meses",
-        min_value=meses_2024[0],
-        max_value=meses_2024[-1],
-        value=(meses_2024[0], meses_2024[-1]),
-        format="MMM",
-        step=timedelta(days=31)
+    ano = st.sidebar.selectbox(
+        "Selecione o ano de análise", 
+        [2024, 2023, 2022, 2021, 2020]
     )
 
-    df_filtrado = df_meltado[
-        (df_meltado["Macrorregião"].isin(regioes_selecionadas)) &
-        (df_meltado["Data"] >= intervalo_meses[0]) &
-        (df_meltado["Data"] <= intervalo_meses[1])
+    dados_ano = dados[dados["DT_NOTIFIC"].dt.year == ano]
+
+
+    data1 = dados_ano["DT_NOTIFIC"].min().date()
+    data2 = dados_ano["DT_NOTIFIC"].max().date()
+
+
+    slider = st.sidebar.slider(
+        "Selecione o intervalo de notificação",
+        min_value=data1,
+        max_value=data2,
+        value=(data1, data2),
+        format="DD/MM/YYYY",
+        step=timedelta(days=1)
+    )
+
+
+    dados_filtrados = dados_ano[
+        (dados_ano["DT_NOTIFIC"].dt.date >= slider[0]) & 
+        (dados_ano["DT_NOTIFIC"].dt.date <= slider[1])
     ]
 
-    st.title("Quadro Geral de Casos de Violência")
-    st.markdown("Este gráfico mostra a distribuição de casos por mês nas macrorregiões de Pernambuco em 2024.")
+    raca = st.sidebar.selectbox(
+        "Selecione a cor ou raça",
+        ["Nenhum", "Branca", "Preta", "Parda", "Amarela", "Indígena", "Ignorado"])
+    
+    dados_raca = dados_filtrados[dados_filtrados["CS_RACA"] == raca ]
 
-    grafico = alt.Chart(df_filtrado).mark_line(point=True).encode(
-        x=alt.X("Mês:N", sort=ordem_meses, title="Mês"),
-        y=alt.Y("Casos:Q", title="Número de Casos"),
-        color="Macrorregião:N",
-        tooltip=["Macrorregião", "Mês", "Casos"]
-    ).properties(
-        width=800,
-        height=500,
-        title="Número de Casos por Mês e Macrorregião (2024)"
-    )
+    if raca == "Nenhum":
 
-    st.dataframe(df_filtrado)
-
-    st.altair_chart(grafico, use_container_width=True)
-
-    def calcular_variacao(df, inicio, fim):
-
-        resultados = []
-
-        for regiao in regioes_selecionadas:
-
-            df_regiao = df[(df["Macrorregião"] == regiao) & (df["Data"] >= inicio) & (df["Data"] <= fim)]
-
-            if df_regiao.empty:
-
-                continue
-
-            df_regiao = df_regiao.sort_values("Data")
-
-            valor_inicio = df_regiao.iloc[0]["Casos"]
-
-            valor_fim = df_regiao.iloc[-1]["Casos"]
-
-
-            if pd.isna(valor_inicio) or valor_inicio == 0:
-
-                variacao = None
-
-            else:
-
-                variacao = ((valor_fim - valor_inicio) / valor_inicio) * 100
-
-            resultados.append((regiao, variacao))
-
-        return resultados
-
-    variacoes = calcular_variacao(df_filtrado, intervalo_meses[0], intervalo_meses[1])
-
-   
-    st.markdown("### Variação percentual de casos entre o primeiro e último mês selecionados por macrorregião:")
-
-    if not variacoes:
-
-        st.write("Nenhum dado disponível para as regiões e período selecionados.")
-
+        st.dataframe(dados_filtrados) 
+        grafico(dados_filtrados, ano)
+    
     else:
+        st.dataframe(dados_raca)
+        grafico(dados_raca, ano)
 
-        for regiao, variacao in variacoes:
-
-            if variacao is None:
-
-                texto = f"- **{regiao}**: dados insuficientes para calcular variação."
-
-            else:
-
-                if variacao > 0:
-
-                    texto = f"- **{regiao}**: aumento de {variacao:.2f}% nos casos."
-
-                elif variacao < 0:
-
-                    texto = f"- **{regiao}**: redução de {abs(variacao):.2f}% nos casos."
-
-                else:
-
-                    texto = f"- **{regiao}**: sem variação nos casos."
-
-            st.write(texto)
-
+    
 elif st.session_state.page == "🗺️ Mapa Interativo":
 
     st.markdown("<h1 style='text-align: center;'>Mapa Interativo</h1>", unsafe_allow_html=True)
     st.title("🌡️ Mapa de Calor - Notificações na RMR")
 
-    dados = pd.DataFrame({
-        'Município': [
-            'Recife', 'Olinda', 'Jaboatão dos Guararapes',
-            'Paulista', 'Camaragibe', 'São Lourenço da Mata',
-            'Igarassu', 'Abreu e Lima', 'Cabo de Santo Agostinho',
-            'Moreno', 'Itapissuma', 'Araçoiaba', 'Itamaracá'
-        ],
-        'Latitude': [
-            -8.0476, -7.9986, -8.1127,
-            -7.9408, -8.0237, -7.9907,
-            -7.8286, -7.9111, -8.2822,
-            -8.1082, -7.7758, -7.7883, -7.7425
-        ],
-        'Longitude': [
-            -34.8770, -34.8450, -34.9286,
-            -34.8731, -34.9787, -35.0133,
-            -34.9012, -34.8983, -35.0255,
-            -35.0831, -34.9564, -35.0906, -34.8298
-        ],
-        'Casos': [
-            320, 150, 290,
-            80, 70, 60,
-            50, 45, 110,
-            40, 25, 15, 30
-        ]
-    })
+    casos = get_quadro()
 
+    casos["DT_NOTIFIC"] = pd.to_datetime(casos["DT_NOTIFIC"])
+
+    ano = st.sidebar.selectbox(
+        "Selecione o ano de análise", 
+        [2024, 2023, 2022, 2021, 2020]
+    )
+
+    dados_ano = casos[casos["DT_NOTIFIC"].dt.year == ano]
+
+
+    data1 = dados_ano["DT_NOTIFIC"].min().date()
+    data2 = dados_ano["DT_NOTIFIC"].max().date()
+
+
+    slider = st.sidebar.slider(
+        "Selecione o intervalo",
+        min_value=data1,
+        max_value=data2,
+        value=(data1, data2),
+        format="DD/MM/YYYY",
+        step=timedelta(days=1)
+    )
+
+
+    dados_filtrados = dados_ano[
+        (dados_ano["DT_NOTIFIC"].dt.date >= slider[0]) & 
+        (dados_ano["DT_NOTIFIC"].dt.date <= slider[1])
+    ]
+
+    raca = st.sidebar.selectbox(
+        "Selecione a cor ou raça",
+        ["Nenhum", "Branca", "Preta", "Parda", "Amarela", "Indígena", "Ignorado"])
+    
+    dados_raca = dados_filtrados[dados_filtrados["CS_RACA"] == raca ]
+
+    dados_geo = carregar_dados_pernambuco()
+
+    contagem_de_casos = None
+
+    if raca == "Nenhum":
+
+        contagem_de_casos = dados_filtrados["MUNICIPIO"].value_counts()
+        dados_geo["Casos"] = dados_geo["cidade"].map(contagem_de_casos).fillna(0).astype(int)
+    
+    else:
+        contagem_de_casos = dados_raca["MUNICIPIO"].value_counts()
+        dados_geo["Casos"] = dados_geo["cidade"].map(contagem_de_casos).fillna(0).astype(int)
+
+    contagem_de_casos = dados_filtrados["MUNICIPIO"].value_counts()
+    dados_geo["Casos"] = dados_geo["cidade"].map(contagem_de_casos).fillna(0).astype(int)
+        
 
     heat_data = []
 
-    for _, row in dados.iterrows():
+    for _, row in dados_geo.iterrows():
 
-        heat_data.extend([[row['Latitude'], row['Longitude']]] * row['Casos'])
+        heat_data.extend([[row['latitude'], row['longitude']]] * row['Casos'])
 
  
     m = folium.Map(location=[-8.05, -34.9], zoom_start=10)
@@ -223,22 +330,29 @@ elif st.session_state.page == "🗺️ Mapa Interativo":
     HeatMap(heat_data, radius=20, blur=15, min_opacity=0.3).add_to(m)
 
 
-    for _, row in dados.iterrows():
+    for _, row in dados_geo.iterrows():
 
         folium.Marker(
-            location=[row['Latitude'], row['Longitude']],
-            popup=f"{row['Município']}<br>Casos: {row['Casos']}",
+            location=[row['latitude'], row['longitude']],
+            popup=f"{row['cidade']}<br>Casos: {row['Casos']}",
             icon=folium.Icon(color="blue", icon="info-sign")
         ).add_to(m)
 
 
     folium_static(m)
 
-homepage_btn = st.button("Homepage")
+elif st.session_state.page == "🤝 Equipes":
+    eqp = get_equipes()
+    equipes(eqp)
+    
 
-if homepage_btn:
-      
-      st.switch_page("pages/_homepage.py")
+elif st.session_state.page == "⚙️ Configurações":
+
+    config()
+
+
+
+
         
 
 
