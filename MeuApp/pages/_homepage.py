@@ -7,7 +7,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-st.image("pages/image.png", use_container_width=True) 
+st.image("MeuApp\pages\image.png", use_container_width=True) 
 col1, col2, col3 = st.columns([2, 3, 2])
 col2.title("Bem Vindo!")
 
