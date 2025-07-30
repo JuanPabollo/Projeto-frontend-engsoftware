@@ -47,7 +47,7 @@ def registrar_usuario(data):
 
         error_message = "Erro no cadastro. Por favor, tente novamente."
 
-        if response in locals() and response is not None:
+        if response is not None:
 
             try:
                 error_details = response.json()
