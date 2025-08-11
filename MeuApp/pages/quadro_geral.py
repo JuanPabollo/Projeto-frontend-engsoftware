@@ -535,12 +535,12 @@ elif st.session_state.page == "🗺️ Mapa Interativo":
 
 
     for _, row in dados_geo.iterrows():
-
-        folium.Marker(
-            location=[row['latitude'], row['longitude']],
-            popup=f"{row['cidade']}<br>Casos: {row['Casos']}",
-            icon=folium.Icon(color="blue", icon="info-sign")
-        ).add_to(m)
+        if row['Casos'] != 0:
+            folium.Marker(
+                location=[row['latitude'], row['longitude']],
+                popup=f"{row['cidade']}<br>Casos: {row['Casos']}",
+                icon=folium.Icon(color="blue", icon="info-sign")
+            ).add_to(m)
 
 
     folium_static(m)
